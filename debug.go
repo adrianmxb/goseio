@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	srv := eio.NewServer()
+	srv, _ := eio.NewServer()
 	http.HandleFunc("/", srv.ServeHTTP)
 	http.ListenAndServe(":3000", nil)
 }
