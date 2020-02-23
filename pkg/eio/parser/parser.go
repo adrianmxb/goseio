@@ -20,9 +20,9 @@ func (fwc *FakeWriteCloser) Close() error {
 	return nil
 }
 
-func PrepareWriter(w io.Writer, packet packet.Packet, supportsBinary bool) io.WriteCloser {
+func PrepareWriter(w io.Writer, packetsHaveBinary bool, supportsBinary bool) io.WriteCloser {
 	var writer io.WriteCloser = &FakeWriteCloser{w}
-	if packet.IsBinary && !supportsBinary {
+	if packetsHaveBinary && !supportsBinary {
 		writer = base64.NewEncoder(base64.StdEncoding, w)
 	}
 	return writer

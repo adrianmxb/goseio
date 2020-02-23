@@ -9,11 +9,11 @@ import (
 	"github.com/adrianmxb/goseio/pkg/eio/packet"
 	"github.com/adrianmxb/goseio/pkg/eio/parser"
 	"html/template"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +23,12 @@ const (
 	XHR   PollingType = 0
 	JSONP PollingType = 1
 )
+
+var payloadBufPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
 
 type PollingOptions struct {
 	TransportOptions
@@ -35,9 +41,10 @@ type Polling struct {
 	*Transport
 	PollingOptions PollingOptions
 
-	dataReady    chan bool
-	pollReady    chan bool
-	readDeadline chan time.Time
+	dataReady     chan bool
+	pollReady     chan bool
+	finishPayload chan bool
+	readDeadline  chan time.Time
 }
 
 func NewPolling(opt PollingOptions, sid string) *Polling {
@@ -83,6 +90,10 @@ func NewPolling(opt PollingOptions, sid string) *Polling {
 	return polling
 }
 
+func (p *Polling) startPayloadWriter() {
+
+}
+
 func (p *Polling) startModeratorBuddy() {
 	ackClosing := false
 	for {
@@ -118,48 +129,68 @@ func (p *Polling) SetWriteDeadline(t time.Time) error {
 func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) error {
 	pack := <-p.sendPacket
 	data := <-p.sendData
+	interrupt := false
 
 	select {
 	case <-p.tspModerator:
-		pack = packet.Packet{
-			PacketType: packet.Noop,
-			IsBinary:   false,
-		}
+		pack = packet.Packet{PacketType: packet.Noop, IsBinary: false}
 		data = nil
+		interrupt = true
 	default:
 		select {
 		case <-p.tspClosing:
-			pack = packet.Packet{
-				PacketType: packet.Close,
-				IsBinary:   false,
-			}
+			pack = packet.Packet{PacketType: packet.Close, IsBinary: false}
 			data = nil
+			interrupt = true
 		default:
 		}
 	}
 
-	respond := func(writer io.Writer, data []byte) error {
-		p.pollReady <- true
+	hasBinary := pack.IsBinary
+	packSlice := append([]packet.Packet{}, pack)
+	dataSlice := append([][]byte{}, data)
 
-		preparedWriter := parser.PrepareWriter(w, pack, p.SupportsBinary)
-		defer preparedWriter.Close()
+	if !interrupt {
+	Loop:
+		for {
+			select {
+			case pack := <-p.sendPacket:
+				packSlice = append(packSlice, pack)
+				dataSlice = append(dataSlice, <-p.sendData)
+				if pack.IsBinary {
+					hasBinary = true
+				}
+			default:
+				break Loop
+			}
+		}
+	}
 
-		length, err := parser.EncodePayloadLength(w, pack, data, p.SupportsBinary)
+	//TODO: is it a good idea to pool this?
+	buf := payloadBufPool.Get().(*bytes.Buffer)
+	defer payloadBufPool.Put(buf)
+	buf.Reset()
+	writer := bufio.NewWriter(buf)
+
+	preparedWriter := parser.PrepareWriter(writer, hasBinary, p.SupportsBinary)
+	for i, pack := range packSlice {
+		length, err := parser.EncodePayloadLength(writer, pack, dataSlice[i], p.SupportsBinary)
 		if err != nil {
 			return err
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(length))
-		err = parser.WriteHeader(w, pack, p.SupportsBinary)
+		err = parser.WriteHeader(writer, pack, p.SupportsBinary)
 		if err != nil {
 			return err
 		}
-
-		if _, err := preparedWriter.Write(data); err != nil {
+		if _, err := preparedWriter.Write(dataSlice[i]); err != nil {
 			return err
 		}
-
-		return nil
+		preparedWriter.Close()
 	}
+	writer.Flush()
+
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 
 	if p.PollingOptions.Type == JSONP {
 		buf := bytes.NewBuffer(nil)
@@ -167,9 +198,9 @@ func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) erro
 		jsonp := r.URL.Query().Get("j")
 
 		w.Header().Set("Content-Type", "text/javascript; charset=UTF-8")
-
+		p.pollReady <- true
 		w.Write([]byte("___eio[" + jsonp + "](\""))
-		respond(writer, data)
+		w.Write(buf.Bytes())
 		writer.Flush()
 
 		template.JSEscape(w, buf.Bytes())
@@ -179,14 +210,16 @@ func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) erro
 
 	//TODO: make compression threshold configurable
 	COMPRESSION_THRESHOLD := 1024
-	if pack.IsBinary {
+	if hasBinary {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	} else {
 		w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
 	}
 
-	if !p.PollingOptions.HttpCompression || len(data) < COMPRESSION_THRESHOLD {
-		return respond(w, data)
+	if !p.PollingOptions.HttpCompression || buf.Len() < COMPRESSION_THRESHOLD {
+		p.pollReady <- true
+		w.Write(buf.Bytes())
+		return nil
 	}
 
 	encodingSupported := ""
@@ -197,30 +230,28 @@ func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) erro
 		}
 	}
 
+	ebuf := new(bytes.Buffer)
 	switch encodingSupported {
 	case "gzip":
-		var buf bytes.Buffer
-		writer := gzip.NewWriter(&buf)
-		if _, err := writer.Write(data); err != nil {
+		writer := gzip.NewWriter(ebuf)
+		if _, err := writer.Write(buf.Bytes()); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return err
 		}
 		writer.Close()
-		data = buf.Bytes()
-		w.Header().Set("Content-Encoding", encodingSupported)
 	case "deflate":
-		var buf bytes.Buffer
-		writer := zlib.NewWriter(&buf)
-		if _, err := writer.Write(data); err != nil {
+		writer := zlib.NewWriter(ebuf)
+		if _, err := writer.Write(buf.Bytes()); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return err
 		}
 		writer.Close()
-		data = buf.Bytes()
-		w.Header().Set("Content-Encoding", encodingSupported)
 	}
+	w.Header().Set("Content-Encoding", encodingSupported)
 
-	return respond(w, data)
+	p.pollReady <- true
+	w.Write(ebuf.Bytes())
+	return nil
 }
 
 var regexSlashes, _ = regexp.Compile(`/(\\)?\\n/g`)

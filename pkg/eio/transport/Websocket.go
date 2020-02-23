@@ -117,7 +117,7 @@ func (ws *Websocket) startSender() {
 				}
 			}
 			err = parser.WriteHeader(writer, pack, ws.SupportsBinary)
-			wrappedWriter := parser.PrepareWriter(writer, pack, ws.SupportsBinary)
+			wrappedWriter := parser.PrepareWriter(writer, pack.IsBinary, ws.SupportsBinary)
 
 			wrappedWriter.Write(data)
 

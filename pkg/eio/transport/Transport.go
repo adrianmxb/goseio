@@ -55,8 +55,8 @@ func NewTransport(opt TransportOptions) *Transport {
 		// ^= closing
 		tspClosing: make(chan struct{}),
 
-		sendPacket: make(chan packet.Packet, 1),
-		sendData:   make(chan []byte, 1),
+		sendPacket: make(chan packet.Packet, 30),
+		sendData:   make(chan []byte, 30),
 		recvPacket: make(chan packet.Packet),
 		recvData:   make(chan []byte),
 	}
