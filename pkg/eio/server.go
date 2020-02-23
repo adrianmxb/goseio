@@ -19,6 +19,8 @@ type Config struct {
 	//MaxHttpBufferSize ???
 }
 
+type HandlerFunc func(socket *Socket, data []byte, isBinary bool)
+
 const (
 	UnknownTransport = iota
 	UnknownSid
@@ -53,6 +55,8 @@ type Server struct {
 	clientsMutex sync.RWMutex
 	clients      map[string]*Socket
 	errors       map[int][]byte
+
+	MsgHandler HandlerFunc
 
 	Path         string
 	PingInterval time.Duration
@@ -124,6 +128,12 @@ func NewServer() (*Server, error) {
 		s.errors[Forbidden] = b
 	}
 	return s, nil
+}
+
+//if sync is set the message handler gets called in a synchronized manner so you don't have to
+//synchronize access to data.
+func (s *Server) OnMessage(handlerFunc HandlerFunc) {
+	s.MsgHandler = handlerFunc
 }
 
 func (s *Server) VerifyRequest(query url.Values, r *http.Request, upgrade bool) (bool, int) {
@@ -261,8 +271,6 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 	}
 
 	socket := NewSocket(id, s, tsp, r)
-	socket.SendPacket("", "")
-
 	tsp.HandleRequest(r, w)
 
 	s.clientsMutex.Lock()

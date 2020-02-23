@@ -18,7 +18,7 @@ type Socket struct {
 	stateLock     sync.Mutex
 	upgradeState  UpgradeState
 	readyState    ReadyState
-	request       *http.Request
+	remoteAddr    string
 }
 
 func NewSocket(id string, server *Server, transport transport.ITransport, req *http.Request) *Socket {
@@ -27,8 +27,8 @@ func NewSocket(id string, server *Server, transport transport.ITransport, req *h
 		server:       server,
 		upgradeState: UpgradeStateNone,
 		readyState:   ReadyStateOpening,
-		request:      req,
 		Transport:    transport,
+		remoteAddr:   req.RemoteAddr,
 	}
 
 	sock.Open()
@@ -43,8 +43,6 @@ func (s *Socket) Close() {
 	}
 
 	s.readyState = ReadyStateClosing
-
-	//wait for data to write somehow...
 
 	defer s.transportLock.RUnlock()
 	s.transportLock.RLock()
@@ -89,12 +87,7 @@ func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool)
 				}()
 			}
 		case packet.Message:
-			fmt.Println(data)
-			fmt.Printf("%s\n", data)
-			s.Transport.Send(packet.Packet{
-				PacketType: packet.Message,
-				IsBinary:   pack.IsBinary,
-			}, data, false)
+			s.server.MsgHandler(s, data, pack.IsBinary)
 		case packet.Upgrade:
 			s.stateLock.Lock()
 			if s.readyState != ReadyStateClosed {
@@ -146,6 +139,11 @@ func (s *Socket) Open() {
 	}
 }
 
-func (s *Socket) SendPacket(ptype string, data string) {
-
+func (s *Socket) SendMessage(data []byte, isBinary bool) {
+	defer s.transportLock.RUnlock()
+	s.transportLock.RLock()
+	s.Transport.Send(packet.Packet{
+		PacketType: packet.Message,
+		IsBinary:   isBinary,
+	}, data, false)
 }

@@ -72,19 +72,25 @@ var binaryByte = []byte{1}
 var endByte = []byte{255}
 
 func EncodePayloadLength(w io.Writer, packet packet.Packet, data []byte, supportsBinary bool) (int, error) {
-	count := utf8.RuneCount(data)
+	count := len(data)
 	//adjust packetRuneCount for utf-16 size we got from engine.io
-	uncheckedRunes := data
-	for len(uncheckedRunes) > 0 {
-		lastRune, size := utf8.DecodeLastRune(uncheckedRunes)
-		if lastRune == utf8.RuneError {
-			return 0, fmt.Errorf("invalid payload")
+	if !packet.IsBinary || packet.IsBinary && !supportsBinary {
+		count = utf8.RuneCount(data)
+		uncheckedRunes := data
+		for len(uncheckedRunes) > 0 {
+			lastRune, size := utf8.DecodeLastRune(uncheckedRunes)
+			if lastRune == utf8.RuneError {
+				return 0, fmt.Errorf("invalid payload")
+			}
+			if r1, r2 := utf16.EncodeRune(lastRune); r1 != utf8.RuneError || r2 != utf8.RuneError {
+				count++
+			}
+			uncheckedRunes = uncheckedRunes[:len(uncheckedRunes)-size]
 		}
-		if r1, r2 := utf16.EncodeRune(lastRune); r1 != utf8.RuneError || r2 != utf8.RuneError {
-			count++
-		}
-		uncheckedRunes = uncheckedRunes[:len(uncheckedRunes)-size]
 	}
+
+	//packet type (open,close,...) needs 1 character -> count++
+	count++
 
 	if packet.IsBinary && supportsBinary {
 		w.Write(binaryByte)
@@ -97,7 +103,7 @@ func EncodePayloadLength(w io.Writer, packet packet.Packet, data []byte, support
 		w.Write(encodedLength)
 		w.Write(endByte)
 
-		return len(binaryByte) + len(encodedLength) + len(endByte), nil
+		return len(binaryByte) + len(encodedLength) + len(endByte) + count, nil
 	} else {
 		if packet.IsBinary {
 			count = base64.StdEncoding.EncodedLen(count)
@@ -105,13 +111,11 @@ func EncodePayloadLength(w io.Writer, packet packet.Packet, data []byte, support
 			count++
 		}
 
-		//packet type (open,close,...) needs 1 character -> count++
-		count++
-
 		var payloadLen []byte
-		strconv.AppendInt(payloadLen, int64(count), 10)
+		payloadLen = strconv.AppendInt(payloadLen, int64(count), 10)
 		payloadLen = append(payloadLen, ':')
 		w.Write(payloadLen)
+
 		return count + len(payloadLen), nil
 	}
 }

@@ -139,6 +139,8 @@ func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) erro
 	}
 
 	respond := func(writer io.Writer, data []byte) error {
+		p.pollReady <- true
+
 		preparedWriter := parser.PrepareWriter(w, pack, p.SupportsBinary)
 		defer preparedWriter.Close()
 
@@ -156,9 +158,6 @@ func (p *Polling) HandlePollRequest(r *http.Request, w http.ResponseWriter) erro
 			return err
 		}
 
-		preparedWriter.Close()
-
-		p.pollReady <- true
 		return nil
 	}
 
