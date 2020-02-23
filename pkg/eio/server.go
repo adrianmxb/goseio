@@ -222,7 +222,7 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var transport transport.ITransport
+	var tsp transport.ITransport
 	switch query.Get("transport") {
 	case "websocket":
 		conn, err := s.ws.Upgrade(w, r, nil)
@@ -230,7 +230,7 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		transport = transport.NewWebsocket(
+		tsp = transport.NewWebsocket(
 			transport.WSOptions{
 				TransportOptions: transport.TransportOptions{
 					SupportsBinary: query.Get("b64") == "",
@@ -252,15 +252,15 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 			pollingData.Type = transport.XHR
 			//XHR
 		}
-		transport = transport.NewPolling(pollingData, id)
+		tsp = transport.NewPolling(pollingData, id)
 	default:
 		return
 	}
 
-	socket := NewSocket(id, s, transport, r)
+	socket := NewSocket(id, s, tsp, r)
 	socket.SendPacket("", "")
 
-	transport.HandleRequest(r, w)
+	tsp.HandleRequest(r, w)
 
 	s.clientsMutex.Lock()
 	s.clients[id] = socket
