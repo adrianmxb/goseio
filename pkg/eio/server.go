@@ -54,6 +54,7 @@ type Server struct {
 	clients      map[string]*Socket
 	errors       map[int][]byte
 
+	Path         string
 	PingInterval time.Duration
 	PingTimeout  time.Duration
 
@@ -70,6 +71,7 @@ type Server struct {
 }
 
 func NewServer() (*Server, error) {
+	path := "/engine.io"
 	pi := 20000
 	pt := 20000
 	deflate := false
@@ -77,6 +79,7 @@ func NewServer() (*Server, error) {
 		clients: make(map[string]*Socket),
 		errors:  make(map[int][]byte),
 
+		Path:              path + "/",
 		PerMessageDeflate: deflate,
 		ws: websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -272,7 +275,12 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
-	r.Header.Get("")
+	//TODO: add possibility to add a custom function handle the user can pass by config.
+	if r.URL.Path != s.Path {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
 	if ok, errCode := s.VerifyRequest(query, r, false); !ok {
 		s.SendError(w, r, errCode)
 		return
