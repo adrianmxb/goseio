@@ -3,28 +3,29 @@ package eio
 import (
 	"fmt"
 	"github.com/adrianmxb/goseio/pkg/eio/packet"
-	"github.com/adrianmxb/goseio/pkg/eio/transports"
+	"github.com/adrianmxb/goseio/pkg/eio/transport"
 	"net/http"
 	"sync"
 	"time"
 )
 
 type Socket struct {
-	id           string
-	server       *Server
-	Transport    transports.Transport
-	stateLock    sync.Mutex
-	upgradeState transports.UpgradeState
-	readyState   transports.ReadyState
-	request      *http.Request
+	id            string
+	server        *Server
+	Transport     transport.ITransport
+	transportLock sync.RWMutex
+	stateLock     sync.Mutex
+	upgradeState  UpgradeState
+	readyState    ReadyState
+	request       *http.Request
 }
 
-func NewSocket(id string, server *Server, transport transports.Transport, req *http.Request) *Socket {
+func NewSocket(id string, server *Server, transport transport.ITransport, req *http.Request) *Socket {
 	sock := &Socket{
 		id:           id,
 		server:       server,
-		upgradeState: transports.UpgradeStateNone,
-		readyState:   transports.ReadyStateOpening,
+		upgradeState: UpgradeStateNone,
+		readyState:   ReadyStateOpening,
 		request:      req,
 		Transport:    transport,
 	}
@@ -33,25 +34,33 @@ func NewSocket(id string, server *Server, transport transports.Transport, req *h
 	return sock
 }
 
-func (s *Socket) Upgrade(transport transports.Transport) {
-	s.upgradeState = transports.UpgradeStateUpgrading
+func (s *Socket) Close() {
+	defer s.stateLock.Unlock()
+	s.stateLock.Lock()
+	if s.readyState != ReadyStateOpen {
+		return
+	}
 
+	s.readyState = ReadyStateClosing
+
+	//wait for data to write somehow...
+
+	defer s.transportLock.RUnlock()
+	s.transportLock.RLock()
+	s.Transport.Close()
 }
 
-func (s *Socket) HandleTransport(transport transports.Transport, upgrading bool) {
+func (s *Socket) Upgrade(transport transport.Transport) {
+	s.upgradeState = UpgradeStateUpgrading
+}
+
+func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool) {
 	go func() {
 		stopNoop := make(chan struct{}, 1)
 		for {
-			//we stop handling packets if the transport gets killed.
-			select {
-			case <-transport.GetKillChannel():
+			pack, data, err := transport.Recv()
+			if err != nil {
 				return
-			default:
-				break
-			}
-			pack, data, error := transport.Recv()
-			if error != nil {
-				fmt.Println(error)
 			}
 			if upgrading {
 				switch pack.PacketType {
@@ -60,7 +69,7 @@ func (s *Socket) HandleTransport(transport transports.Transport, upgrading bool)
 						transport.Send(packet.Packet{
 							PacketType: packet.Pong,
 							IsBinary:   pack.IsBinary,
-						}, data)
+						}, data, false)
 
 						go func() {
 							for {
@@ -69,27 +78,32 @@ func (s *Socket) HandleTransport(transport transports.Transport, upgrading bool)
 								case <-stopNoop:
 									return
 								default:
+									s.transportLock.RLock()
 									s.Transport.Send(packet.Packet{
 										PacketType: packet.Noop,
 										IsBinary:   pack.IsBinary,
-									}, nil)
+									}, nil, false)
+									s.transportLock.RUnlock()
 								}
 							}
 						}()
 					}
 				case packet.Upgrade:
 					s.stateLock.Lock()
-					if s.readyState != transports.ReadyStateClosed {
+					if s.readyState != ReadyStateClosed {
+						stopNoop <- struct{}{}
+						s.transportLock.Lock()
 						s.Transport.Discard()
-						s.upgradeState = transports.UpgradeStateUpgraded
+						s.upgradeState = UpgradeStateUpgraded
 						s.Transport.Close()
 						s.Transport = transport
 						upgrading = false
-						stopNoop <- struct{}{}
-						if s.readyState == transports.ReadyStateClosing {
+						if s.readyState == ReadyStateClosing {
 							transport.Close()
 						}
+						s.transportLock.Unlock()
 					}
+					s.stateLock.Unlock()
 				default:
 					fmt.Println("unhandled packet (upgrading)")
 					fmt.Println(pack)
@@ -104,14 +118,14 @@ func (s *Socket) HandleTransport(transport transports.Transport, upgrading bool)
 				transport.Send(packet.Packet{
 					PacketType: packet.Pong,
 					IsBinary:   pack.IsBinary,
-				}, nil)
+				}, nil, false)
 			case packet.Message:
 				fmt.Println(data)
 				fmt.Printf("%s\n", data)
 				s.Transport.Send(packet.Packet{
 					PacketType: packet.Message,
 					IsBinary:   pack.IsBinary,
-				}, data)
+				}, data, false)
 			default:
 				fmt.Println("unhandled packet.")
 				fmt.Println(pack)
@@ -123,7 +137,7 @@ func (s *Socket) HandleTransport(transport transports.Transport, upgrading bool)
 }
 
 func (s *Socket) Open() {
-	s.readyState = transports.ReadyStateOpen
+	s.readyState = ReadyStateOpen
 
 	//send open msg
 	openPacket, _ := json.Marshal(&packet.OpenPacket{
@@ -138,13 +152,13 @@ func (s *Socket) Open() {
 	s.Transport.Send(packet.Packet{
 		PacketType: packet.Open,
 		IsBinary:   false,
-	}, openPacket)
+	}, openPacket, false)
 
 	if s.server.initialPacket != nil {
 		s.Transport.Send(packet.Packet{
 			PacketType: packet.Message,
 			IsBinary:   false,
-		}, s.server.initialPacket)
+		}, s.server.initialPacket, false)
 	}
 }
 

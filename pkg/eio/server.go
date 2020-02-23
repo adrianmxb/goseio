@@ -1,7 +1,7 @@
 package eio
 
 import (
-	"github.com/adrianmxb/goseio/pkg/eio/transports"
+	"github.com/adrianmxb/goseio/pkg/eio/transport"
 	"github.com/gorilla/websocket"
 	jsoniter "github.com/json-iterator/go"
 	"net/http"
@@ -25,6 +25,23 @@ const (
 	BadHandshakeMethod
 	BadRequest
 	Forbidden
+)
+
+type UpgradeState int
+
+const (
+	UpgradeStateNone UpgradeState = iota
+	UpgradeStateUpgrading
+	UpgradeStateUpgraded
+)
+
+type ReadyState int
+
+const (
+	ReadyStateOpening ReadyState = iota
+	ReadyStateOpen
+	ReadyStateClosing
+	ReadyStateClosed
 )
 
 type RequestError struct {
@@ -183,15 +200,17 @@ func (s *Server) HandleUpgrade(query url.Values, w http.ResponseWriter, r *http.
 		conn.Close()
 		return
 	}
-	if client.upgradeState == transports.UpgradeStateUpgrading ||
-		client.upgradeState == transports.UpgradeStateUpgraded {
+	if client.upgradeState == UpgradeStateUpgrading ||
+		client.upgradeState == UpgradeStateUpgraded {
 		conn.Close()
 		return
 	}
 
-	transport := transports.NewWebsocket(
-		transports.WSOptions{
-			SupportsBinary: query.Get("b64") == "",
+	transport := transport.NewWebsocket(
+		transport.WSOptions{
+			TransportOptions: transport.TransportOptions{
+				SupportsBinary: query.Get("b64") == "",
+			},
 		}, query.Get("sid"), conn)
 
 	client.HandleTransport(transport, true)
@@ -203,7 +222,7 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var transport transports.Transport
+	var transport transport.ITransport
 	switch query.Get("transport") {
 	case "websocket":
 		conn, err := s.ws.Upgrade(w, r, nil)
@@ -211,24 +230,29 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		transport = transports.NewWebsocket(
-			transports.WSOptions{
-				SupportsBinary: query.Get("b64") == "",
+		transport = transport.NewWebsocket(
+			transport.WSOptions{
+				TransportOptions: transport.TransportOptions{
+					SupportsBinary: query.Get("b64") == "",
+				},
 			}, id, conn)
 		break
 	case "polling":
-		pollingData := transports.CreatePollingBase(transports.PollingOpt{
-			TransportBase:     transports.TransportBase{},
-			SupportsBinary:    query.Get("b64") == "",
+		pollingData := transport.PollingOptions{
+			TransportOptions: transport.TransportOptions{
+				SupportsBinary: query.Get("b64") == "",
+			},
 			MaxHttpBufferSize: s.MaxHttpBufferSize,
 			HttpCompression:   s.HttpCompression,
-		}, id)
+		}
 		if query.Get("j") != "" {
+			pollingData.Type = transport.JSONP
 			//JSONP
 		} else {
-			transport = transports.NewXHRPolling(pollingData)
+			pollingData.Type = transport.XHR
 			//XHR
 		}
+		transport = transport.NewPolling(pollingData, id)
 	default:
 		return
 	}
