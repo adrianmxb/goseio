@@ -7,6 +7,7 @@ import (
 	"github.com/adrianmxb/goseio/pkg/eio/packet"
 	"io"
 	"io/ioutil"
+	"strconv"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -107,7 +108,9 @@ func EncodePayloadLength(w io.Writer, packet packet.Packet, data []byte, support
 		//packet type (open,close,...) needs 1 character -> count++
 		count++
 
-		payloadLen := []byte(fmt.Sprintf("%d:", count))
+		var payloadLen []byte
+		strconv.AppendInt(payloadLen, int64(count), 10)
+		payloadLen = append(payloadLen, ':')
 		w.Write(payloadLen)
 		return count + len(payloadLen), nil
 	}
