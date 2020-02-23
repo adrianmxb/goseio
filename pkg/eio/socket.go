@@ -1,6 +1,7 @@
 package eio
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/adrianmxb/goseio/pkg/eio/packet"
 	"github.com/adrianmxb/goseio/pkg/eio/transport"
@@ -54,6 +55,8 @@ func (s *Socket) Upgrade(transport transport.Transport) {
 	s.upgradeState = UpgradeStateUpgrading
 }
 
+var probeBytes = []byte("probe")
+
 func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool) {
 	go func() {
 		stopNoop := make(chan struct{}, 1)
@@ -62,63 +65,30 @@ func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool)
 			if err != nil {
 				return
 			}
-			if upgrading {
-				switch pack.PacketType {
-				case packet.Ping:
-					if string(data) == "probe" {
-						transport.Send(packet.Packet{
-							PacketType: packet.Pong,
-							IsBinary:   pack.IsBinary,
-						}, data, false)
-
-						go func() {
-							for {
-								time.Sleep(100 * time.Millisecond)
-								select {
-								case <-stopNoop:
-									return
-								default:
-									s.transportLock.RLock()
-									s.Transport.Send(packet.Packet{
-										PacketType: packet.Noop,
-										IsBinary:   pack.IsBinary,
-									}, nil, false)
-									s.transportLock.RUnlock()
-								}
-							}
-						}()
-					}
-				case packet.Upgrade:
-					s.stateLock.Lock()
-					if s.readyState != ReadyStateClosed {
-						stopNoop <- struct{}{}
-						s.transportLock.Lock()
-						s.Transport.Discard()
-						s.upgradeState = UpgradeStateUpgraded
-						s.Transport.Close()
-						s.Transport = transport
-						upgrading = false
-						if s.readyState == ReadyStateClosing {
-							transport.Close()
-						}
-						s.transportLock.Unlock()
-					}
-					s.stateLock.Unlock()
-				default:
-					fmt.Println("unhandled packet (upgrading)")
-					fmt.Println(pack)
-					fmt.Println(data)
-				}
-				transport.SetReadDeadline(time.Now().Add(s.server.PingInterval).Add(s.server.PingTimeout))
-				continue
-			}
-
 			switch pack.PacketType {
 			case packet.Ping:
 				transport.Send(packet.Packet{
 					PacketType: packet.Pong,
 					IsBinary:   pack.IsBinary,
-				}, nil, false)
+				}, data, false)
+				if upgrading && bytes.Compare(data, probeBytes) == 0 {
+					go func() {
+						for {
+							time.Sleep(100 * time.Millisecond)
+							select {
+							case <-stopNoop:
+								return
+							default:
+								s.transportLock.RLock()
+								s.Transport.Send(packet.Packet{
+									PacketType: packet.Noop,
+									IsBinary:   pack.IsBinary,
+								}, nil, false)
+								s.transportLock.RUnlock()
+							}
+						}
+					}()
+				}
 			case packet.Message:
 				fmt.Println(data)
 				fmt.Printf("%s\n", data)
@@ -126,6 +96,22 @@ func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool)
 					PacketType: packet.Message,
 					IsBinary:   pack.IsBinary,
 				}, data, false)
+			case packet.Upgrade:
+				s.stateLock.Lock()
+				if s.readyState != ReadyStateClosed {
+					stopNoop <- struct{}{}
+					s.transportLock.Lock()
+					s.Transport.Discard()
+					s.upgradeState = UpgradeStateUpgraded
+					s.Transport.Close()
+					s.Transport = transport
+					upgrading = false
+					if s.readyState == ReadyStateClosing {
+						transport.Close()
+					}
+					s.transportLock.Unlock()
+				}
+				s.stateLock.Unlock()
 			default:
 				fmt.Println("unhandled packet.")
 				fmt.Println(pack)

@@ -64,7 +64,6 @@ func NewPolling(opt PollingOptions, sid string) *Polling {
 	go func() {
 		dead := false
 		deadline := <-polling.readDeadline
-		timer := time.NewTimer(deadline.Sub(time.Now()))
 		for {
 			if dead {
 				deadline = <-polling.readDeadline
@@ -72,15 +71,11 @@ func NewPolling(opt PollingOptions, sid string) *Polling {
 			}
 
 			select {
-			case <-timer.C:
+			case <-time.After(deadline.Sub(time.Now())):
 				dead = true
 				fmt.Println("reached deadline, closing transport. REWORK THIS!")
 				polling.tspModSignal <- "closing"
 			case deadline = <-polling.readDeadline:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(deadline.Sub(time.Now()))
 			}
 		}
 	}()
