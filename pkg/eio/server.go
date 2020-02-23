@@ -216,7 +216,7 @@ func (s *Server) HandleUpgrade(query url.Values, w http.ResponseWriter, r *http.
 			},
 		}, query.Get("sid"), conn)
 
-	client.HandleTransport(transport, true)
+	go client.HandleTransport(transport, true)
 }
 
 func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Request) {

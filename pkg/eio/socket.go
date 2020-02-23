@@ -58,68 +58,66 @@ func (s *Socket) Upgrade(transport transport.Transport) {
 var probeBytes = []byte("probe")
 
 func (s *Socket) HandleTransport(transport transport.ITransport, upgrading bool) {
-	go func() {
-		stopNoop := make(chan struct{}, 1)
-		for {
-			pack, data, err := transport.Recv()
-			if err != nil {
-				return
-			}
-			switch pack.PacketType {
-			case packet.Ping:
-				transport.Send(packet.Packet{
-					PacketType: packet.Pong,
-					IsBinary:   pack.IsBinary,
-				}, data, false)
-				if upgrading && bytes.Compare(data, probeBytes) == 0 {
-					go func() {
-						for {
-							time.Sleep(100 * time.Millisecond)
-							select {
-							case <-stopNoop:
-								return
-							default:
-								s.transportLock.RLock()
-								s.Transport.Send(packet.Packet{
-									PacketType: packet.Noop,
-									IsBinary:   pack.IsBinary,
-								}, nil, false)
-								s.transportLock.RUnlock()
-							}
-						}
-					}()
-				}
-			case packet.Message:
-				fmt.Println(data)
-				fmt.Printf("%s\n", data)
-				s.Transport.Send(packet.Packet{
-					PacketType: packet.Message,
-					IsBinary:   pack.IsBinary,
-				}, data, false)
-			case packet.Upgrade:
-				s.stateLock.Lock()
-				if s.readyState != ReadyStateClosed {
-					stopNoop <- struct{}{}
-					s.transportLock.Lock()
-					s.Transport.Discard()
-					s.upgradeState = UpgradeStateUpgraded
-					s.Transport.Close()
-					s.Transport = transport
-					upgrading = false
-					if s.readyState == ReadyStateClosing {
-						transport.Close()
-					}
-					s.transportLock.Unlock()
-				}
-				s.stateLock.Unlock()
-			default:
-				fmt.Println("unhandled packet.")
-				fmt.Println(pack)
-				fmt.Println(data)
-			}
-			transport.SetReadDeadline(time.Now().Add(s.server.PingInterval).Add(s.server.PingTimeout))
+	stopNoop := make(chan struct{}, 1)
+	for {
+		pack, data, err := transport.Recv()
+		if err != nil {
+			return
 		}
-	}()
+		switch pack.PacketType {
+		case packet.Ping:
+			transport.Send(packet.Packet{
+				PacketType: packet.Pong,
+				IsBinary:   pack.IsBinary,
+			}, data, false)
+			if upgrading && bytes.Compare(data, probeBytes) == 0 {
+				go func() {
+					for {
+						time.Sleep(100 * time.Millisecond)
+						select {
+						case <-stopNoop:
+							return
+						default:
+							s.transportLock.RLock()
+							s.Transport.Send(packet.Packet{
+								PacketType: packet.Noop,
+								IsBinary:   pack.IsBinary,
+							}, nil, false)
+							s.transportLock.RUnlock()
+						}
+					}
+				}()
+			}
+		case packet.Message:
+			fmt.Println(data)
+			fmt.Printf("%s\n", data)
+			s.Transport.Send(packet.Packet{
+				PacketType: packet.Message,
+				IsBinary:   pack.IsBinary,
+			}, data, false)
+		case packet.Upgrade:
+			s.stateLock.Lock()
+			if s.readyState != ReadyStateClosed {
+				stopNoop <- struct{}{}
+				s.transportLock.Lock()
+				s.Transport.Discard()
+				s.upgradeState = UpgradeStateUpgraded
+				s.Transport.Close()
+				s.Transport = transport
+				upgrading = false
+				if s.readyState == ReadyStateClosing {
+					transport.Close()
+				}
+				s.transportLock.Unlock()
+			}
+			s.stateLock.Unlock()
+		default:
+			fmt.Println("unhandled packet.")
+			fmt.Println(pack)
+			fmt.Println(data)
+		}
+		transport.SetReadDeadline(time.Now().Add(s.server.PingInterval).Add(s.server.PingTimeout))
+	}
 }
 
 func (s *Socket) Open() {
@@ -133,7 +131,7 @@ func (s *Socket) Open() {
 		PingTimeout:  s.server.PingTimeout.Milliseconds(),
 	})
 
-	s.HandleTransport(s.Transport, false)
+	go s.HandleTransport(s.Transport, false)
 
 	s.Transport.Send(packet.Packet{
 		PacketType: packet.Open,
