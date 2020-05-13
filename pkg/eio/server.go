@@ -1,6 +1,7 @@
 package eio
 
 import (
+	"bytes"
 	"github.com/adrianmxb/goseio/pkg/eio/transport"
 	"github.com/gorilla/websocket"
 	jsoniter "github.com/json-iterator/go"
@@ -19,7 +20,8 @@ type Config struct {
 	//MaxHttpBufferSize ???
 }
 
-type HandlerFunc func(socket *Socket, data []byte, isBinary bool)
+type ConnectHandlerFunc func(socket *Socket)
+type MessageHandlerFunc func(socket *Socket, data []byte, isBinary bool)
 
 const (
 	UnknownTransport = iota
@@ -56,7 +58,8 @@ type Server struct {
 	clients      map[string]*Socket
 	errors       map[int][]byte
 
-	MsgHandler HandlerFunc
+	MsgHandler     MessageHandlerFunc
+	ConnectHandler ConnectHandlerFunc
 
 	Path         string
 	PingInterval time.Duration
@@ -74,14 +77,16 @@ type Server struct {
 	PerMessageDeflate bool
 }
 
-func NewServer() (*Server, error) {
-	path := "/engine.io"
+func NewServer(path string, packet bytes.Buffer) (*Server, error) {
 	pi := 20000
 	pt := 20000
 	deflate := false
 	s := &Server{
 		clients: make(map[string]*Socket),
 		errors:  make(map[int][]byte),
+
+		MsgHandler:     func(socket *Socket, data []byte, isBinary bool) {},
+		ConnectHandler: func(socket *Socket) {},
 
 		Path:              path + "/",
 		PerMessageDeflate: deflate,
@@ -93,6 +98,8 @@ func NewServer() (*Server, error) {
 			},
 			EnableCompression: deflate,
 		},
+
+		initialPacket: packet.Bytes(),
 
 		PingInterval: time.Duration(pi) * time.Millisecond,
 		PingTimeout:  time.Duration(pt) * time.Millisecond,
@@ -132,8 +139,12 @@ func NewServer() (*Server, error) {
 
 //if sync is set the message handler gets called in a synchronized manner so you don't have to
 //synchronize access to data.
-func (s *Server) OnMessage(handlerFunc HandlerFunc) {
+func (s *Server) OnMessage(handlerFunc MessageHandlerFunc) {
 	s.MsgHandler = handlerFunc
+}
+
+func (s *Server) OnConnection(handlerFunc ConnectHandlerFunc) {
+	s.ConnectHandler = handlerFunc
 }
 
 func (s *Server) VerifyRequest(query url.Values, r *http.Request, upgrade bool) (bool, int) {
@@ -277,6 +288,7 @@ func (s *Server) Handshake(query url.Values, w http.ResponseWriter, r *http.Requ
 	s.clients[id] = socket
 	s.clientsMutex.Unlock()
 
+	s.ConnectHandler(socket)
 	// TODO: handle close!!! (delete from s.clients, ...)
 }
 

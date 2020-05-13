@@ -11,7 +11,7 @@ import (
 )
 
 type Socket struct {
-	id            string
+	Id            string
 	server        *Server
 	Transport     transport.ITransport
 	transportLock sync.RWMutex
@@ -23,7 +23,7 @@ type Socket struct {
 
 func NewSocket(id string, server *Server, transport transport.ITransport, req *http.Request) *Socket {
 	sock := &Socket{
-		id:           id,
+		Id:           id,
 		server:       server,
 		upgradeState: UpgradeStateNone,
 		readyState:   ReadyStateOpening,
@@ -47,10 +47,6 @@ func (s *Socket) Close() {
 	defer s.transportLock.RUnlock()
 	s.transportLock.RLock()
 	s.Transport.Close()
-}
-
-func (s *Socket) Upgrade(transport transport.Transport) {
-	s.upgradeState = UpgradeStateUpgrading
 }
 
 var probeBytes = []byte("probe")
@@ -118,7 +114,7 @@ func (s *Socket) Open() {
 
 	//send open msg
 	openPacket, _ := json.Marshal(&packet.OpenPacket{
-		SID:          s.id,
+		SID:          s.Id,
 		Upgrades:     []string{"websocket"},
 		PingInterval: s.server.PingInterval.Milliseconds(),
 		PingTimeout:  s.server.PingTimeout.Milliseconds(),

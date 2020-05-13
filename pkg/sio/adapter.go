@@ -10,6 +10,15 @@ type Adapter struct {
 	sids      map[string]*socketData
 }
 
+type IAdapter interface {
+	Add(id string, rooms ...string)
+	Del(id string, room string)
+	DelAll(id string)
+
+	GetClientsIn(rooms ...string) []*Socket
+	GetRoomsOf(id string) []string
+}
+
 func NewAdapter(namespace *Namespace) *Adapter {
 	return &Adapter{
 		namespace: namespace,
@@ -61,6 +70,17 @@ func (a *Adapter) Del(id string, room string) {
 	}
 }
 
+func (a *Adapter) DelAll(id string) {
+	sd, ok := a.sids[id]
+	if !ok {
+		return
+	}
+
+	for room, _ := range sd.joinedRooms {
+		a.Del(id, room)
+	}
+}
+
 func (a *Adapter) GetClientsIn(rooms ...string) []*Socket {
 	var sids []*Socket
 	ids := make(map[string]bool)
@@ -103,15 +123,4 @@ func (a *Adapter) GetRoomsOf(id string) []string {
 	}
 
 	return keys
-}
-
-func (a *Adapter) DelAll(id string) {
-	sd, ok := a.sids[id]
-	if !ok {
-		return
-	}
-
-	for room, _ := range sd.joinedRooms {
-		a.Del(id, room)
-	}
 }

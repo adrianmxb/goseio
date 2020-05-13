@@ -1,7 +1,9 @@
 package parser
 
+type PacketTypes int
+
 const (
-	Connect = iota
+	Connect PacketTypes = iota
 	Disconnect
 	Event
 	Ack
